@@ -18,6 +18,7 @@ package wordpress
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"path"
 
 	corev1 "k8s.io/api/core/v1"
@@ -350,6 +351,25 @@ func (wp *Wordpress) initContainers() []corev1.Container {
 	return containers
 }
 
+func (wp *Wordpress) readinessHandler() corev1.Handler {
+	// If the HTTPGetAction doesn't have any Host parameter it will use pod's IP address as Host.
+	// This is helpful because Wordpress may not be installed and in this case it will redirect to
+	// Spec.Domains[0]. If the same host was used in the initial request as Spec.Domains[0], k8s will follow
+	// the Location header, which may point to an unreachable address, thus making the pod UnHealthy.
+	//
+	// Refs:
+	//		* https://github.com/kubernetes/kubernetes/pull/75416
+	//		* https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+	//				Any code greater than or equal to 200 and less than 400 indicates success.
+
+	return corev1.Handler{
+		HTTPGet: &corev1.HTTPGetAction{
+			Path: "/",
+			Port: intstr.FromInt(InternalHTTPPort),
+		},
+	}
+}
+
 // WebPodTemplateSpec generates a pod template spec suitable for use in Wordpress deployment
 func (wp *Wordpress) WebPodTemplateSpec() (out corev1.PodTemplateSpec) {
 	out = corev1.PodTemplateSpec{}
@@ -374,6 +394,14 @@ func (wp *Wordpress) WebPodTemplateSpec() (out corev1.PodTemplateSpec) {
 					Name:          "http",
 					ContainerPort: int32(InternalHTTPPort),
 				},
+			},
+			ReadinessProbe: &corev1.Probe{
+				Handler:             wp.readinessHandler(),
+				InitialDelaySeconds: 10,
+				TimeoutSeconds:      30,
+				PeriodSeconds:       5,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
 			},
 		},
 	}
